@@ -1,4 +1,4 @@
-# vm_stress — Linux VM Stress Testing Tool
+# StressXZ — Linux VM Stress Testing Tool
 
 > **Author:** Panna ABDUL HAKIM — [PNAX.io LAB](https://pnax.io) — <panna@pnax.io>  
 > **License:** MIT &nbsp;|&nbsp; **Version:** 1.2.0 &nbsp;|&nbsp; **Python:** 3.10+
