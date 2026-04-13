@@ -1,0 +1,7 @@
+# vm_stress — Linux VM Stress Testing Tool
+# =========================================
+# Core runtime dependency (system metrics)
+psutil>=5.9.0
+
+# SSH / remote execution (only needed for --remote-host)
+paramiko>=3.0.0

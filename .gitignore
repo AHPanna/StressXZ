@@ -1,0 +1,20 @@
+# vm_stress — gitignore
+# =====================
+
+# Auto-generated stress reports
+results/*.txt
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Temporary disk stress files (safety fallback — normally cleaned by workers)
+/tmp/stress_disk_*.tmp
