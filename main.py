@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-main.py — Entry point for the vm_stress Linux VM Stress Testing Tool.
+main.py — Entry point for the stressXZ Linux VM Stress Testing Tool.
 
 Author  : Panna ABDUL HAKIM <panna@pnax.io>
 Org     : PNAX.io LAB  (https://pnax.io)

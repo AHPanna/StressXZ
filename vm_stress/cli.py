@@ -56,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     - **Output & Misc**      — ``--output``, ``--dry-run``, ``--log-level``
     """
     parser = argparse.ArgumentParser(
-        prog="vm_stress_test",
+        prog="stressXZ",
         description=(
             "Production-ready Linux VM stress tester.\n"
             "Stress CPU, RAM, Disk I/O, and/or Network individually "
