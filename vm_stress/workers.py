@@ -287,13 +287,14 @@ def network_worker(
         "Network worker started — target %.2f Mbps on loopback port %d",
         limit_mbps, port,
     )
-    client: Optional[socket.socket] = None  # type: ignore[name-defined]
+    client: socket.socket | None = None
     try:
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client.connect(("127.0.0.1", port))
         client.settimeout(2.0)
 
-        while not stop_event.is_set():
+        _net_failed = False
+        while not stop_event.is_set() and not _net_failed:
             t0   = time.perf_counter()
             sent = 0
 
@@ -304,12 +305,14 @@ def network_worker(
                     sent += payload_size
                 except (socket.timeout, OSError) as exc:
                     error_queue.put(f"Network socket error: {exc}")
-                    stop_event.set()
+                    # Only stop *this* worker — do NOT touch the shared
+                    # stop_event so CPU / RAM workers keep running.
+                    _net_failed = True
                     break
 
             # Rate-limit: wait out the remainder of each 1-second window
             elapsed = time.perf_counter() - t0
-            if elapsed < 1.0 and not stop_event.is_set():
+            if elapsed < 1.0 and not stop_event.is_set() and not _net_failed:
                 time.sleep(1.0 - elapsed)
 
     except OSError as exc:

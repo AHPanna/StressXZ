@@ -177,12 +177,15 @@ class SSHContext(ExecutionContext):
         if not path:
             return None
         key_path = Path(path).expanduser()
-        for cls in (
+        # DSSKey was removed in paramiko 3.x — only include it when present
+        _key_classes = [
             paramiko.RSAKey,
             paramiko.Ed25519Key,
             paramiko.ECDSAKey,
-            paramiko.DSSKey,
-        ):
+        ]
+        if hasattr(paramiko, "DSSKey"):
+            _key_classes.append(paramiko.DSSKey)
+        for cls in _key_classes:
             try:
                 return cls.from_private_key_file(str(key_path))
             except paramiko.ssh_exception.SSHException:

@@ -77,11 +77,14 @@ def run_remote(cfg: StressConfig) -> StressResult:
     # Build the archive once
     archive_b64 = _build_archive_b64()
 
+    t_start = datetime.now()
     with SSHContext(cfg) as ctx:
         _upload_package(ctx, archive_b64)
+        _ensure_deps(ctx)
         stdout = _execute_remote(ctx, cfg)
+    t_end = datetime.now()
 
-    return _parse_remote_output(stdout, cfg)
+    return _parse_remote_output(stdout, cfg, t_start, t_end)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -120,6 +123,45 @@ def _build_archive_b64() -> str:
             tar.addfile(info, io.BytesIO(data))
 
     return base64.b64encode(buf.getvalue()).decode()
+
+
+def _ensure_deps(ctx: SSHContext) -> None:
+    """
+    Silently install ``psutil`` into the remote staging directory so that
+    no ``sudo``, no system-wide pip, and no user-level pip are required.
+
+    Strategy
+    --------
+    1. Try ``python3 -c 'import psutil'`` — already available system-wide.
+    2. Try ``pip3 install --target <staging_dir> psutil`` — installs into the
+       project directory that is already on ``sys.path`` for the remote run.
+    3. Try ``python3 -m pip install --target <staging_dir> psutil`` — same but
+       via the module interface (works in some venv setups where ``pip3`` is absent).
+    4. Fall back to ``apt-get`` / ``yum`` with ``sudo`` only when all else fails.
+
+    Failures are logged as warnings — the test still runs without psutil
+    but metric readings will be zero.
+    """
+    logger.info("Checking remote Python dependencies (psutil)…")
+    # --target installs the package files directly into the staging dir.
+    # The remote main.py already runs from that dir, so Python finds them
+    # without any PYTHONPATH manipulation.
+    target = _REMOTE_DIR
+    check_cmd = " || ".join([
+        "python3 -c 'import psutil' 2>/dev/null",
+        f"pip3 install -q --target {target} psutil 2>/dev/null",
+        f"python3 -m pip install -q --target {target} psutil 2>/dev/null",
+        "sudo apt-get install -y -q python3-psutil 2>/dev/null",
+        "sudo yum install -y -q python3-psutil 2>/dev/null",
+    ])
+    rc, _, _ = ctx.run(check_cmd)
+    if rc != 0:
+        logger.warning(
+            "Could not install psutil on remote (tried pip3 --target / apt-get / yum) — "
+            "metric collection will show zeros",
+        )
+    else:
+        logger.info("Remote psutil OK")
 
 
 def _upload_package(ctx: SSHContext, archive_b64: str) -> None:
@@ -185,7 +227,12 @@ def _build_remote_args(cfg: StressConfig) -> str:
     return " ".join(parts)
 
 
-def _parse_remote_output(raw: str, cfg: StressConfig) -> StressResult:
+def _parse_remote_output(
+    raw: str,
+    cfg: StressConfig,
+    t_start: Optional[datetime] = None,
+    t_end: Optional[datetime] = None,
+) -> StressResult:
     """
     Build a minimal :class:`StressResult` from the remote stdout.
 
@@ -193,13 +240,13 @@ def _parse_remote_output(raw: str, cfg: StressConfig) -> StressResult:
     raw stdout here so the local operator can see what happened.  In a
     future iteration this could be replaced with a structured JSON export.
     """
+    now = datetime.now()
     result = StressResult(
         hostname=cfg.remote_host or "remote",
         config=cfg,
-        start_time=datetime.now(),
-        end_time=datetime.now(),
+        start_time=t_start or now,
+        end_time=t_end or now,
     )
-    # Surface raw output so it appears in the local report
-    preview = raw.strip()[:3000] or "(no output)"
-    result.errors.append(f"[remote stdout preview]\n{preview}")
+    # Remote stdout (progress bar + summary table) is informational only —
+    # do not surface it as an error in the local report.
     return result
