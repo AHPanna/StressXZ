@@ -48,10 +48,14 @@ class StressConfig:
     remote_user:  str           = "root"
     remote_port:  int           = 22
     ssh_key:      Optional[str] = None   # private key for the remote VM
+    ssh_password:      Optional[str] = None   # password auth for the remote VM
+    ssh_password_file: Optional[str] = None   # file containing the SSH password
     bastion_host: Optional[str] = None
     bastion_user: Optional[str] = None
     bastion_port: int           = 22
     bastion_key:  Optional[str] = None   # private key for the bastion host (falls back to ssh_key)
+    bastion_password:      Optional[str] = None   # password auth for the bastion
+    bastion_password_file: Optional[str] = None   # file containing the bastion password
 
     # ── Privilege escalation ──────────────────────────────────────────────────
     sudo_password:      Optional[str] = None   # inline sudo password (remote)

@@ -32,6 +32,7 @@ logger = logging.getLogger("vm_stress.executor")
 
 SUDO_TIMEOUT = 30   # seconds granted for sudo authentication
 
+
 def _resolve_sudo_password(cfg: "StressConfig") -> Optional[str]:
     """
     Return the plaintext sudo password from *cfg*, or ``None`` if not set.
@@ -44,6 +45,22 @@ def _resolve_sudo_password(cfg: "StressConfig") -> Optional[str]:
         return cfg.sudo_password
     if cfg.sudo_password_file:
         p = Path(cfg.sudo_password_file).expanduser()
+        return p.read_text(encoding="utf-8").splitlines()[0].strip()
+    return None
+
+
+def _resolve_password(inline: Optional[str], file_path: Optional[str]) -> Optional[str]:
+    """
+    Return a plaintext SSH login password, or ``None`` if neither source is set.
+
+    Resolution order:
+    1. *inline*    — the value passed directly
+    2. *file_path* — first line of the given local file (whitespace-stripped)
+    """
+    if inline:
+        return inline
+    if file_path:
+        p = Path(file_path).expanduser()
         return p.read_text(encoding="utf-8").splitlines()[0].strip()
     return None
 try:
@@ -123,10 +140,14 @@ class SSHContext(ExecutionContext):
     set the first SSH connection goes to the bastion, and a ``direct-tcpip``
     channel is then forwarded to the actual target host.
 
-    Authentication order:
-    1. Explicit ``cfg.ssh_key`` file (auto-detects RSA / Ed25519 / ECDSA / DSS)
-    2. SSH agent (when no key file is given)
-    3. Default key-file search (``~/.ssh/id_*``)
+    Authentication order (per connection):
+    1. Explicit key file (``cfg.ssh_key`` / ``cfg.bastion_key``)
+    2. Password (``cfg.ssh_password`` / ``cfg.ssh_password_file``)
+    3. SSH agent + default key-file search (``~/.ssh/id_*``)
+
+    When a password **or** key is supplied, agent forwarding and the
+    default key search are disabled to avoid confusing authentication
+    sequences.
     """
 
     def __init__(self, cfg: StressConfig) -> None:
@@ -171,18 +192,43 @@ class SSHContext(ExecutionContext):
     def _connect(self) -> None:  # noqa: C901
         """Open SSH connection, optionally tunnelled through a bastion host."""
         cfg = self._cfg
-        # Key for the target remote VM
-        key = self._load_key(cfg.ssh_key)
-        # Key for the bastion host — falls back to the remote key if not set
-        bastion_key = self._load_key(cfg.bastion_key) if cfg.bastion_key else key
+
+        # ── Remote VM credentials ──────────────────────────────────────────────────────
+        key      = self._load_key(cfg.ssh_key)
+        password = _resolve_password(cfg.ssh_password, cfg.ssh_password_file)
+        # When a key or password is given, disable agent/default-key fallbacks
+        use_agent   = (key is None and password is None)
+        look_for_keys = use_agent
+
+        if password and not key:
+            logger.info(
+                "SSH auth for %s: password (key not set)", cfg.remote_host
+            )
+        elif key:
+            logger.info(
+                "SSH auth for %s: private key", cfg.remote_host
+            )
+        else:
+            logger.info(
+                "SSH auth for %s: agent / default key files", cfg.remote_host
+            )
 
         connect_kwargs: dict = dict(
             username=cfg.remote_user,
             pkey=key,
-            look_for_keys=(key is None),
-            allow_agent=(key is None),
+            password=password,
+            look_for_keys=look_for_keys,
+            allow_agent=use_agent,
             timeout=15,
         )
+
+        # ── Bastion credentials ─────────────────────────────────────────────────────────
+        bastion_key      = self._load_key(cfg.bastion_key) if cfg.bastion_key else key
+        bastion_password = _resolve_password(
+            cfg.bastion_password, cfg.bastion_password_file
+        ) if (cfg.bastion_password or cfg.bastion_password_file) else password
+        b_use_agent     = (bastion_key is None and bastion_password is None)
+        b_look_for_keys = b_use_agent
 
         if cfg.bastion_host:
             logger.info(
@@ -198,8 +244,9 @@ class SSHContext(ExecutionContext):
                 port=cfg.bastion_port,
                 username=cfg.bastion_user or cfg.remote_user,
                 pkey=bastion_key,
-                look_for_keys=(bastion_key is None),
-                allow_agent=(bastion_key is None),
+                password=bastion_password,
+                look_for_keys=b_look_for_keys,
+                allow_agent=b_use_agent,
                 timeout=15,
             )
             bastion_transport = self._bastion_client.get_transport()

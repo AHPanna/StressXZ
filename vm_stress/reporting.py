@@ -139,9 +139,19 @@ def save_report(result: StressResult, path: str) -> None:
         if cfg.network:
             lines.append(f"  Net limit  : {cfg.network_limit_mbps} Mbps")
         if cfg.remote_host:
-            lines.append(f"  Remote     : {cfg.remote_host}")
+            ssh_auth = (
+                "key"      if cfg.ssh_key else
+                "password" if (cfg.ssh_password or cfg.ssh_password_file) else
+                "agent / default keys"
+            )
+            lines.append(f"  Remote     : {cfg.remote_host}  (auth: {ssh_auth})")
         if cfg.bastion_host:
-            lines.append(f"  Bastion    : {cfg.bastion_host}")
+            b_auth = (
+                "key"      if cfg.bastion_key else
+                "password" if (cfg.bastion_password or cfg.bastion_password_file) else
+                "same as remote"
+            )
+            lines.append(f"  Bastion    : {cfg.bastion_host}  (auth: {b_auth})")
         sudo_active = bool(cfg.sudo_password or cfg.sudo_password_file)
         lines.append(f"  Sudo       : {'yes (password provided)' if sudo_active else 'no'}")
 

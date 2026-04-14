@@ -1,7 +1,7 @@
 # StressXZ — Linux VM Stress Testing Tool
 
 > **Author:** Panna ABDUL HAKIM — [PNAX.io LAB](https://pnax.io) — <panna@pnax.io>  
-> **License:** MIT &nbsp;|&nbsp; **Version:** 1.3.0 &nbsp;|&nbsp; **Python:** 3.10+
+> **License:** MIT &nbsp;|&nbsp; **Version:** 1.4.0 &nbsp;|&nbsp; **Python:** 3.10+
 
 A **production-ready Python tool** for stress-testing Linux virtual machines.  
 Test CPU, RAM, Disk I/O, and Network individually or together, with precise resource limits, multithreading, remote SSH execution (including bastion/jump host support), and structured report output.
@@ -19,7 +19,9 @@ Test CPU, RAM, Disk I/O, and Network individually or together, with precise reso
 | **Resource limits** | Never saturates the system unless you ask it to |
 | **Multithreading** | Configurable worker threads per resource |
 | **Remote SSH** | Run on any Linux VM — direct or via bastion/jump host |
-| **Separate bastion key** | Different SSH private keys for bastion and target VM |
+| **SSH key auth** | RSA / Ed25519 / ECDSA / DSS private keys |
+| **SSH password auth** | Login password (inline or file) for key-less VMs |
+| **Separate bastion key/password** | Independent credentials for bastion and target VM |
 | **Sudo support** | Password piped securely via `sudo -S` (inline or file) |
 | **Live progress bar** | Unicode block-character countdown in the terminal |
 | **Dry-run mode** | Preview the planned config without running anything |
@@ -270,6 +272,51 @@ python3 main.py --cpu --ram --disk --network --duration 120 \
   --sudo-password-file ~/.ssh/sudo_pass
 ```
 
+### SSH Password Authentication
+
+Use `--ssh-password` / `--ssh-password-file` when the remote VM uses **password auth** instead of (or in addition to) key auth.  The same pattern works independently for the bastion with `--bastion-password` / `--bastion-password-file`.
+
+> **Auth priority per connection:** key → password → SSH agent / default key files  
+> Supplying a key or password disables the agent/default-key fallback to avoid confusing auth sequences.
+
+**Remote VM — inline password** *(quick, but visible in local shell history)*:
+
+```bash
+python3 main.py --cpu --ram --duration 60 \
+  --remote-host 10.0.0.5 --remote-user ubuntu \
+  --ssh-password 'MyVMS3cr3t!'
+```
+
+**Remote VM — password file** *(recommended)*:
+
+```bash
+echo 'MyVMS3cr3t!' > ~/.ssh/vm_pass && chmod 600 ~/.ssh/vm_pass
+
+python3 main.py --cpu --ram --duration 60 \
+  --remote-host 10.0.0.5 --remote-user ubuntu \
+  --ssh-password-file ~/.ssh/vm_pass
+```
+
+**Bastion with password + VM with key:**
+
+```bash
+python3 main.py --cpu --disk --duration 60 \
+  --remote-host 10.0.0.5      --remote-user ubuntu --ssh-key ~/.ssh/id_vm_rsa \
+  --bastion-host jump.example.com --bastion-user bastion-user \
+  --bastion-password-file ~/.ssh/bastion_pass
+```
+
+**Everything — bastion password + VM password + sudo:**
+
+```bash
+python3 main.py --cpu --ram --disk --network --duration 120 \
+  --remote-host 10.0.0.5      --remote-user ubuntu \
+  --ssh-password-file ~/.ssh/vm_pass \
+  --bastion-host jump.example.com --bastion-user bastion-user \
+  --bastion-password-file ~/.ssh/bastion_pass \
+  --sudo-password-file ~/.ssh/sudo_pass
+```
+
 ---
 
 ## CLI Reference
@@ -295,14 +342,18 @@ Run Parameters:
   --disk-temp-dir DIR  Temp dir for disk scratch files        (default: /tmp)
 
 Remote Execution (SSH):
-  --remote-host HOST   Target VM IP / hostname
-  --remote-user USER   SSH user on target                    (default: root)
-  --remote-port PORT   SSH port on target                    (default: 22)
-  --ssh-key PATH       Private key file for target VM (auto-detect if omitted)
-  --bastion-host HOST  Bastion / jump host
-  --bastion-user USER  SSH user on bastion
-  --bastion-port PORT  SSH port on bastion                   (default: 22)
-  --bastion-key PATH   Private key for bastion (falls back to --ssh-key)
+  --remote-host HOST        Target VM IP / hostname
+  --remote-user USER        SSH user on target                (default: root)
+  --remote-port PORT        SSH port on target                (default: 22)
+  --ssh-key PATH            Private key for target VM
+  --ssh-password PASS       SSH login password for target VM
+  --ssh-password-file PATH  File whose first line is the SSH password
+  --bastion-host HOST       Bastion / jump host
+  --bastion-user USER       SSH user on bastion
+  --bastion-port PORT       SSH port on bastion               (default: 22)
+  --bastion-key PATH        Private key for bastion (falls back to --ssh-key)
+  --bastion-password PASS        SSH password for bastion (falls back to --ssh-password)
+  --bastion-password-file PATH   File whose first line is the bastion password
 
 Privilege Escalation (Remote Sudo):
   --sudo-password PASS          Sudo password, piped to 'sudo -S' on remote
@@ -393,6 +444,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **1.4.0** | 2026-04-14 | SSH password auth for remote VM and bastion (`--ssh-password`, `--ssh-password-file`, `--bastion-password`, `--bastion-password-file`) |
 | **1.3.0** | 2026-04-14 | Separate `--bastion-key`, `--sudo-password` / `--sudo-password-file`, VM+test-type in report filenames |
 | **1.2.0** | 2026-04-13 | `results/` folder, `.gitignore`, author metadata, MIT licence |
 | **1.1.0** | 2026-04-13 | Multi-module package refactor, improved remote SSH upload |

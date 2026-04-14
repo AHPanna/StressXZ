@@ -158,7 +158,22 @@ Examples:
     )
     rem.add_argument(
         "--ssh-key", metavar="PATH",
-        help="Path to SSH private key.  Falls back to ssh-agent / ~/.ssh/id_*",
+        help="Path to SSH private key for the target VM.  Falls back to password / agent / ~/.ssh/id_*",
+    )
+    rem.add_argument(
+        "--ssh-password", metavar="PASS",
+        help=(
+            "SSH login password for the remote VM.  "
+            "Used when key-based auth is not available.  "
+            "Prefer --ssh-password-file to keep secrets out of shell history"
+        ),
+    )
+    rem.add_argument(
+        "--ssh-password-file", metavar="PATH",
+        help=(
+            "Local file whose first line is the SSH password for the remote VM.  "
+            "Safer than --ssh-password for scripts and CI/CD"
+        ),
     )
     rem.add_argument(
         "--bastion-host", metavar="HOST",
@@ -177,6 +192,20 @@ Examples:
         help=(
             "Path to SSH private key for the bastion host.  "
             "Falls back to --ssh-key if omitted"
+        ),
+    )
+    rem.add_argument(
+        "--bastion-password", metavar="PASS",
+        help=(
+            "SSH login password for the bastion host.  "
+            "Falls back to --ssh-password if omitted.  "
+            "Prefer --bastion-password-file for scripts"
+        ),
+    )
+    rem.add_argument(
+        "--bastion-password-file", metavar="PATH",
+        help=(
+            "Local file whose first line is the SSH password for the bastion host"
         ),
     )
 
@@ -248,10 +277,14 @@ def args_to_config(args: argparse.Namespace) -> StressConfig:
         remote_user=args.remote_user,
         remote_port=args.remote_port,
         ssh_key=args.ssh_key,
+        ssh_password=args.ssh_password,
+        ssh_password_file=args.ssh_password_file,
         bastion_host=args.bastion_host,
         bastion_user=args.bastion_user,
         bastion_port=args.bastion_port,
         bastion_key=args.bastion_key,
+        bastion_password=args.bastion_password,
+        bastion_password_file=args.bastion_password_file,
         sudo_password=args.sudo_password,
         sudo_password_file=args.sudo_password_file,
         output_file=args.output,
