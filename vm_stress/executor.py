@@ -28,7 +28,24 @@ from vm_stress.config import StressConfig
 
 logger = logging.getLogger("vm_stress.executor")
 
-# ── Optional dependency: paramiko ─────────────────────────────────────────────
+# ── Optional dependency: paramiko ─────────────────────────────────────────
+
+SUDO_TIMEOUT = 30   # seconds granted for sudo authentication
+
+def _resolve_sudo_password(cfg: "StressConfig") -> Optional[str]:
+    """
+    Return the plaintext sudo password from *cfg*, or ``None`` if not set.
+
+    Resolution order:
+    1. ``cfg.sudo_password``       — inline value
+    2. ``cfg.sudo_password_file``  — first line of a local file (trimmed)
+    """
+    if cfg.sudo_password:
+        return cfg.sudo_password
+    if cfg.sudo_password_file:
+        p = Path(cfg.sudo_password_file).expanduser()
+        return p.read_text(encoding="utf-8").splitlines()[0].strip()
+    return None
 try:
     import paramiko
     PARAMIKO_AVAILABLE = True
@@ -119,6 +136,11 @@ class SSHContext(ExecutionContext):
                 "Install it with:  pip install paramiko"
             )
         self._cfg = cfg
+        self._sudo_pass = _resolve_sudo_password(cfg)
+        if self._sudo_pass:
+            logger.info(
+                "sudo password provided — privileged commands will use 'sudo -S'"
+            )
         self._client = paramiko.SSHClient()  # type: ignore[union-attr]
         self._client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         self._bastion_client = None   # type: Optional[paramiko.SSHClient]
@@ -149,7 +171,10 @@ class SSHContext(ExecutionContext):
     def _connect(self) -> None:  # noqa: C901
         """Open SSH connection, optionally tunnelled through a bastion host."""
         cfg = self._cfg
+        # Key for the target remote VM
         key = self._load_key(cfg.ssh_key)
+        # Key for the bastion host — falls back to the remote key if not set
+        bastion_key = self._load_key(cfg.bastion_key) if cfg.bastion_key else key
 
         connect_kwargs: dict = dict(
             username=cfg.remote_user,
@@ -172,9 +197,9 @@ class SSHContext(ExecutionContext):
                 cfg.bastion_host,
                 port=cfg.bastion_port,
                 username=cfg.bastion_user or cfg.remote_user,
-                pkey=key,
-                look_for_keys=(key is None),
-                allow_agent=(key is None),
+                pkey=bastion_key,
+                look_for_keys=(bastion_key is None),
+                allow_agent=(bastion_key is None),
                 timeout=15,
             )
             bastion_transport = self._bastion_client.get_transport()
@@ -204,6 +229,38 @@ class SSHContext(ExecutionContext):
     def run(self, command: str) -> tuple[int, str, str]:
         logger.debug("SSH exec on %s: %s", self._cfg.remote_host, command)
         _stdin, stdout, stderr = self._client.exec_command(command, timeout=300)
+        exit_code = stdout.channel.recv_exit_status()
+        return exit_code, stdout.read().decode(), stderr.read().decode()
+
+    def sudo_run(self, command: str) -> tuple[int, str, str]:
+        """
+        Run *command* with ``sudo -S`` on the remote host.
+
+        The sudo password is piped via stdin so it never appears in the
+        process argument list or shell history.
+
+        If no sudo password was configured the command is run as:
+        ``sudo <command>`` (i.e. the remote user must already have
+        passwordless sudo or be root).
+
+        Args:
+            command: Shell command to execute with elevated privileges.
+
+        Returns:
+            ``(returncode, stdout, stderr)`` tuple.
+        """
+        if not self._sudo_pass:
+            # No password — assume passwordless sudo / root
+            return self.run(f"sudo {command}")
+
+        sudo_cmd = f"sudo -S -p '' {command}"
+        logger.debug("SSH sudo exec on %s: %s", self._cfg.remote_host, command)
+        _stdin, stdout, stderr = self._client.exec_command(
+            sudo_cmd, timeout=300
+        )
+        _stdin.write(self._sudo_pass + "\n")
+        _stdin.flush()
+        _stdin.channel.shutdown_write()
         exit_code = stdout.channel.recv_exit_status()
         return exit_code, stdout.read().decode(), stderr.read().decode()
 

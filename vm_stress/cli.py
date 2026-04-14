@@ -172,6 +172,31 @@ Examples:
         "--bastion-port", type=int, default=22, metavar="PORT",
         help="SSH port on the bastion host (default: 22)",
     )
+    rem.add_argument(
+        "--bastion-key", metavar="PATH",
+        help=(
+            "Path to SSH private key for the bastion host.  "
+            "Falls back to --ssh-key if omitted"
+        ),
+    )
+
+    # ── Privilege escalation ─────────────────────────────────────────────────────
+    priv = parser.add_argument_group("Privilege Escalation (Remote Sudo)")
+    priv.add_argument(
+        "--sudo-password", metavar="PASS",
+        help=(
+            "Sudo password for the remote VM user.  "
+            "Used with 'sudo -S' so it is never logged.  "
+            "Prefer --sudo-password-file to avoid secrets in shell history"
+        ),
+    )
+    priv.add_argument(
+        "--sudo-password-file", metavar="PATH",
+        help=(
+            "Path to a local file whose first line is the sudo password.  "
+            "Safer than --sudo-password for CI/CD pipelines"
+        ),
+    )
 
     # ── Output & misc ─────────────────────────────────────────────────────────
     out = parser.add_argument_group("Output & Misc")
@@ -226,6 +251,9 @@ def args_to_config(args: argparse.Namespace) -> StressConfig:
         bastion_host=args.bastion_host,
         bastion_user=args.bastion_user,
         bastion_port=args.bastion_port,
+        bastion_key=args.bastion_key,
+        sudo_password=args.sudo_password,
+        sudo_password_file=args.sudo_password_file,
         output_file=args.output,
         dry_run=args.dry_run,
         log_level=args.log_level,
@@ -272,8 +300,19 @@ def main() -> int:
     if cfg.output_file is None:
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)
         ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
-        host_tag = (cfg.remote_host or "local").replace(".", "_")
-        cfg.output_file = str(RESULTS_DIR / f"stress_report_{host_tag}_{ts}.txt")
+        host_tag = (cfg.remote_host or socket.gethostname()).replace(".", "_")
+        # Collect active test-type tags in a fixed order
+        test_tags = "_".join(
+            tag for tag, active in [
+                ("cpu",     cfg.cpu),
+                ("ram",     cfg.ram),
+                ("disk",    cfg.disk),
+                ("network", cfg.network),
+            ] if active
+        ) or "none"
+        cfg.output_file = str(
+            RESULTS_DIR / f"stress_report_{host_tag}_{test_tags}_{ts}.txt"
+        )
 
     # ── Dispatch ──────────────────────────────────────────────────────────────
     result: StressResult

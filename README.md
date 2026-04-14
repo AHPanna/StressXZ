@@ -1,7 +1,7 @@
 # StressXZ — Linux VM Stress Testing Tool
 
 > **Author:** Panna ABDUL HAKIM — [PNAX.io LAB](https://pnax.io) — <panna@pnax.io>  
-> **License:** MIT &nbsp;|&nbsp; **Version:** 1.2.0 &nbsp;|&nbsp; **Python:** 3.10+
+> **License:** MIT &nbsp;|&nbsp; **Version:** 1.3.0 &nbsp;|&nbsp; **Python:** 3.10+
 
 A **production-ready Python tool** for stress-testing Linux virtual machines.  
 Test CPU, RAM, Disk I/O, and Network individually or together, with precise resource limits, multithreading, remote SSH execution (including bastion/jump host support), and structured report output.
@@ -19,9 +19,11 @@ Test CPU, RAM, Disk I/O, and Network individually or together, with precise reso
 | **Resource limits** | Never saturates the system unless you ask it to |
 | **Multithreading** | Configurable worker threads per resource |
 | **Remote SSH** | Run on any Linux VM — direct or via bastion/jump host |
+| **Separate bastion key** | Different SSH private keys for bastion and target VM |
+| **Sudo support** | Password piped securely via `sudo -S` (inline or file) |
 | **Live progress bar** | Unicode block-character countdown in the terminal |
 | **Dry-run mode** | Preview the planned config without running anything |
-| **Structured reports** | Auto-saved `.txt` file with time-series samples |
+| **Structured reports** | Auto-saved `.txt` with VM name + test type in filename |
 | **Logging levels** | INFO / DEBUG / WARNING / ERROR via `--log-level` |
 
 ---
@@ -219,6 +221,55 @@ python3 main.py --cpu --disk --duration 60 \
   --bastion-port 22
 ```
 
+### Bastion with a Separate SSH Key
+
+Use `--bastion-key` when the bastion host requires a **different private key** from the target VM:
+
+```bash
+python3 main.py --cpu --ram --duration 60 \
+  --remote-host 10.0.0.5   --remote-user ubuntu  --ssh-key ~/.ssh/id_vm_ed25519 \
+  --bastion-host jump.corp.example.com \
+  --bastion-user bastion-user --bastion-key ~/.ssh/id_bastion_rsa
+```
+
+> If `--bastion-key` is omitted the bastion connection falls back to `--ssh-key`.
+
+### Sudo Password (non-root remote user)
+
+When the remote user is not root and some operations need elevated privileges,
+provide a sudo password. It is **piped via stdin** to `sudo -S` — it never
+appears in the process argument list or remote shell history.
+
+**Option A — inline** *(quick, but visible in local shell history)*:
+
+```bash
+python3 main.py --cpu --disk --duration 60 \
+  --remote-host 10.0.0.5 --remote-user ubuntu --ssh-key ~/.ssh/id_rsa \
+  --sudo-password 'MyS3cr3t!'
+```
+
+**Option B — password file** *(recommended for scripts and CI/CD)*:
+
+```bash
+# Create the file (chmod 600 to restrict access)
+echo 'MyS3cr3t!' > ~/.ssh/sudo_pass
+chmod 600 ~/.ssh/sudo_pass
+
+python3 main.py --cpu --disk --duration 60 \
+  --remote-host 10.0.0.5 --remote-user ubuntu --ssh-key ~/.ssh/id_rsa \
+  --sudo-password-file ~/.ssh/sudo_pass
+```
+
+**Full example — bastion + separate key + sudo:**
+
+```bash
+python3 main.py --cpu --ram --disk --network --duration 120 \
+  --remote-host 10.0.0.5   --remote-user ubuntu  --ssh-key ~/.ssh/id_vm_rsa \
+  --bastion-host jump.corp.example.com \
+  --bastion-user bastion-user --bastion-key ~/.ssh/id_bastion_rsa \
+  --sudo-password-file ~/.ssh/sudo_pass
+```
+
 ---
 
 ## CLI Reference
@@ -247,10 +298,15 @@ Remote Execution (SSH):
   --remote-host HOST   Target VM IP / hostname
   --remote-user USER   SSH user on target                    (default: root)
   --remote-port PORT   SSH port on target                    (default: 22)
-  --ssh-key PATH       Private key file (auto-detect if omitted)
+  --ssh-key PATH       Private key file for target VM (auto-detect if omitted)
   --bastion-host HOST  Bastion / jump host
   --bastion-user USER  SSH user on bastion
   --bastion-port PORT  SSH port on bastion                   (default: 22)
+  --bastion-key PATH   Private key for bastion (falls back to --ssh-key)
+
+Privilege Escalation (Remote Sudo):
+  --sudo-password PASS          Sudo password, piped to 'sudo -S' on remote
+  --sudo-password-file PATH     File whose first line is the sudo password
 
 Output & Misc:
   --output, -o FILE    Report file path (auto-named if omitted)
@@ -264,14 +320,17 @@ Output & Misc:
 
 Every run automatically saves a structured `.txt` report inside the **`results/`** folder:
 
-```
+``` 
 results/
-├── stress_report_local_20260413_143023.txt
-├── stress_report_local_20260413_150512.txt
-└── stress_report_10_0_1_20_20260413_160000.txt   ← remote run
+├── stress_report_myvm_cpu_ram_20260414_120000.txt
+├── stress_report_myvm_disk_20260414_130512.txt
+└── stress_report_10_0_1_20_cpu_ram_disk_network_20260414_160000.txt   ← remote run
 ```
 
-File naming: `stress_report_<host>_<YYYYMMDD_HHMMSS>.txt`  
+File naming: `stress_report_<vm-name>_<test-types>_<YYYYMMDD_HHMMSS>.txt`
+- `<vm-name>` is the remote hostname, or the local machine hostname for local runs
+- `<test-types>` lists all active tests separated by `_` (e.g. `cpu_ram`, `disk_network`)
+
 Use `--output <path>` to write the report to any custom location instead.
 
 ### Report Contents
@@ -334,6 +393,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| **1.3.0** | 2026-04-14 | Separate `--bastion-key`, `--sudo-password` / `--sudo-password-file`, VM+test-type in report filenames |
 | **1.2.0** | 2026-04-13 | `results/` folder, `.gitignore`, author metadata, MIT licence |
 | **1.1.0** | 2026-04-13 | Multi-module package refactor, improved remote SSH upload |
 | **1.0.0** | 2026-04-13 | Initial release — single-file production script |

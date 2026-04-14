@@ -142,6 +142,8 @@ def save_report(result: StressResult, path: str) -> None:
             lines.append(f"  Remote     : {cfg.remote_host}")
         if cfg.bastion_host:
             lines.append(f"  Bastion    : {cfg.bastion_host}")
+        sudo_active = bool(cfg.sudo_password or cfg.sudo_password_file)
+        lines.append(f"  Sudo       : {'yes (password provided)' if sudo_active else 'no'}")
 
     lines += [
         "",
