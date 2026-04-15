@@ -145,8 +145,8 @@ def _ensure_deps(ctx: SSHContext) -> None:
     """
     logger.info("Checking remote Python dependencies (psutil)…")
     # --target installs the package files directly into the staging dir.
-    # The remote main.py already runs from that dir, so Python finds them
-    # without any PYTHONPATH manipulation.
+    # We set PYTHONPATH so the verification step finds it the same way the
+    # remote main.py will (via _execute_remote's PYTHONPATH= prefix).
     target = _REMOTE_DIR
     check_cmd = " || ".join([
         "python3 -c 'import psutil' 2>/dev/null",
@@ -155,11 +155,16 @@ def _ensure_deps(ctx: SSHContext) -> None:
         "sudo apt-get install -y -q python3-psutil 2>/dev/null",
         "sudo yum install -y -q python3-psutil 2>/dev/null",
     ])
-    rc, _, _ = ctx.run(check_cmd)
+    # Run install attempt, then verify with PYTHONPATH so we know it'll work at runtime
+    verify_cmd = (
+        f"({check_cmd}) && "
+        f"PYTHONPATH={target}:$PYTHONPATH python3 -c 'import psutil' 2>/dev/null"
+    )
+    rc, _, _ = ctx.run(verify_cmd)
     if rc != 0:
         logger.warning(
             "Could not install psutil on remote (tried pip3 --target / apt-get / yum) — "
-            "metric collection will show zeros",
+            "will use /proc fallback for metrics",
         )
     else:
         logger.info("Remote psutil OK")
@@ -190,7 +195,13 @@ def _upload_package(ctx: SSHContext, archive_b64: str) -> None:
 def _execute_remote(ctx: SSHContext, cfg: StressConfig) -> None:
     """Run the stress test on the remote (stdout is informational only)."""
     args = _build_remote_args(cfg)
-    cmd  = f"cd {_REMOTE_DIR} && python3 main.py {args}"
+    # PYTHONPATH ensures that packages installed via `pip --target <_REMOTE_DIR>`
+    # (e.g. psutil) are importable even without a system-wide or user-level install.
+    cmd  = (
+        f"cd {_REMOTE_DIR} && "
+        f"PYTHONPATH={_REMOTE_DIR}:$PYTHONPATH "
+        f"python3 main.py {args}"
+    )
     logger.info("Remote command: %s", cmd)
 
     rc, out, err = ctx.run(cmd)
