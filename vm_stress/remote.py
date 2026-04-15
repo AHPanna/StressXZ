@@ -81,10 +81,11 @@ def run_remote(cfg: StressConfig) -> StressResult:
     with SSHContext(cfg) as ctx:
         _upload_package(ctx, archive_b64)
         _ensure_deps(ctx)
-        stdout = _execute_remote(ctx, cfg)
-    t_end = datetime.now()
+        _execute_remote(ctx, cfg)
+        t_end = datetime.now()
+        report_txt = _fetch_remote_report(ctx)
 
-    return _parse_remote_output(stdout, cfg, t_start, t_end)
+    return _parse_remote_report(report_txt, cfg, t_start, t_end)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -186,8 +187,8 @@ def _upload_package(ctx: SSHContext, archive_b64: str) -> None:
     logger.info("Upload complete")
 
 
-def _execute_remote(ctx: SSHContext, cfg: StressConfig) -> str:
-    """Run the stress test on the remote and return its stdout."""
+def _execute_remote(ctx: SSHContext, cfg: StressConfig) -> None:
+    """Run the stress test on the remote (stdout is informational only)."""
     args = _build_remote_args(cfg)
     cmd  = f"cd {_REMOTE_DIR} && python3 main.py {args}"
     logger.info("Remote command: %s", cmd)
@@ -199,6 +200,21 @@ def _execute_remote(ctx: SSHContext, cfg: StressConfig) -> str:
         )
     if err.strip():
         logger.debug("Remote stderr:\n%s", err.strip())
+    if out.strip():
+        logger.debug("Remote stdout:\n%s", out.strip())
+
+
+def _fetch_remote_report(ctx: SSHContext) -> str:
+    """Download the structured report file written by the remote run."""
+    remote_path = "/tmp/vm_stress_remote_report.txt"
+    rc, out, err = ctx.run(f"cat {remote_path}")
+    if rc != 0:
+        logger.warning(
+            "Could not read remote report %s (rc=%d): %s",
+            remote_path, rc, err.strip(),
+        )
+        return ""
+    logger.debug("Fetched remote report (%d bytes)", len(out))
     return out
 
 
@@ -227,19 +243,29 @@ def _build_remote_args(cfg: StressConfig) -> str:
     return " ".join(parts)
 
 
-def _parse_remote_output(
-    raw: str,
+def _parse_remote_report(
+    report_txt: str,
     cfg: StressConfig,
     t_start: Optional[datetime] = None,
     t_end: Optional[datetime] = None,
 ) -> StressResult:
     """
-    Build a minimal :class:`StressResult` from the remote stdout.
+    Parse the structured ``.txt`` report written by the remote run and
+    populate a :class:`StressResult` with the actual metric samples.
 
-    The remote process writes its full report to a file; we surface the
-    raw stdout here so the local operator can see what happened.  In a
-    future iteration this could be replaced with a structured JSON export.
+    Lines of interest (from :func:`vm_stress.reporting.save_report`)::
+
+        CPU   avg  : 6.26%
+        RAM   avg  : 5513.0 MB
+        Net   TX    avg : 23.9810 MB/s  (191.848 Mbps)
+        Net   RX    avg : 23.9742 MB/s  (191.794 Mbps)
+        5302  6056  6050  ...            (RAM SAMPLES section)
+        3.219  44.097  ...              (NET TX SAMPLES section)
+
+    Missing sections simply leave the corresponding sample list empty.
     """
+    import re
+
     now = datetime.now()
     result = StressResult(
         hostname=cfg.remote_host or "remote",
@@ -247,6 +273,102 @@ def _parse_remote_output(
         start_time=t_start or now,
         end_time=t_end or now,
     )
-    # Remote stdout (progress bar + summary table) is informational only —
-    # do not surface it as an error in the local report.
+
+    if not report_txt.strip():
+        logger.warning("Remote report was empty — metrics will show as zero.")
+        return result
+
+    # ── Section tracking ──────────────────────────────────────────────────────
+    # After we hit a "── XYZ SAMPLES" heading the *next* non-empty, non-heading
+    # line contains the space-separated floats for that metric.
+    _SECTION_CPU      = "cpu_samples"
+    _SECTION_RAM      = "ram_samples"
+    _SECTION_DISK_W   = "disk_write_samples"
+    _SECTION_NET_TX   = "net_tx_samples"
+    _SECTION_NET_RX   = "net_rx_samples"
+
+    current_section: Optional[str] = None
+
+    for raw_line in report_txt.splitlines():
+        line = raw_line.strip()
+        if not line:
+            current_section = None
+            continue
+
+        # ── Section headings ──────────────────────────────────────────────────
+        low = line.lower()
+        if "cpu samples" in low:
+            current_section = _SECTION_CPU
+            continue
+        if "ram samples" in low:
+            current_section = _SECTION_RAM
+            continue
+        if "disk write samples" in low:
+            current_section = _SECTION_DISK_W
+            continue
+        if "net tx samples" in low:
+            current_section = _SECTION_NET_TX
+            continue
+        if "net rx samples" in low:
+            current_section = _SECTION_NET_RX
+            continue
+        # Any other heading-like lines (start with ──) reset the section
+        if line.startswith("──") or line.startswith("=="):
+            current_section = None
+            continue
+
+        # ── Summary scalar lines ──────────────────────────────────────────────
+        # These are used as a fallback when sample lines are absent.
+        m_cpu_avg = re.match(r"CPU\s+avg\s*:\s+([\d.]+)%", line, re.I)
+        if m_cpu_avg and not result.cpu_samples:
+            result.cpu_samples = [float(m_cpu_avg.group(1))]
+
+        m_ram_avg = re.match(r"RAM\s+avg\s*:\s+([\d.]+)\s+MB", line, re.I)
+        if m_ram_avg and not result.ram_used_mb_samples:
+            result.ram_used_mb_samples = [float(m_ram_avg.group(1))]
+
+        m_net_tx = re.match(
+            r"Net\s+TX\s+avg\s*:\s+([\d.]+)\s+MB/s", line, re.I
+        )
+        if m_net_tx and not result.net_sent_mb_samples:
+            result.net_sent_mb_samples = [float(m_net_tx.group(1))]
+
+        m_net_rx = re.match(
+            r"Net\s+RX\s+avg\s*:\s+([\d.]+)\s+MB/s", line, re.I
+        )
+        if m_net_rx and not result.net_recv_mb_samples:
+            result.net_recv_mb_samples = [float(m_net_rx.group(1))]
+
+        m_disk_w = re.match(
+            r"Disk\s+write\s+avg\s*:\s+([\d.]+)\s+MB/s", line, re.I
+        )
+        if m_disk_w and not result.disk_write_mb_samples:
+            result.disk_write_mb_samples = [float(m_disk_w.group(1))]
+
+        # ── Sample data lines ─────────────────────────────────────────────────
+        if current_section:
+            floats = []
+            for tok in line.split():
+                try:
+                    floats.append(float(tok))
+                except ValueError:
+                    pass
+            if floats:
+                if current_section == _SECTION_CPU:
+                    result.cpu_samples = floats
+                elif current_section == _SECTION_RAM:
+                    result.ram_used_mb_samples = floats
+                elif current_section == _SECTION_DISK_W:
+                    result.disk_write_mb_samples = floats
+                elif current_section == _SECTION_NET_TX:
+                    result.net_sent_mb_samples = floats
+                elif current_section == _SECTION_NET_RX:
+                    result.net_recv_mb_samples = floats
+                current_section = None   # consumed; wait for next heading
+
+    logger.debug(
+        "Parsed remote report — RAM samples=%d  NetTX samples=%d",
+        len(result.ram_used_mb_samples),
+        len(result.net_sent_mb_samples),
+    )
     return result
